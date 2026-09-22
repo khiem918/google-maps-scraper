@@ -1,6 +1,9 @@
 package gmaps
 
 import (
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,4 +172,100 @@ func ensureLen(items []any, length int) []any {
 	copy(extended, items)
 
 	return extended
+}
+
+func TestGetMenu(t *testing.T) {
+	raw, err := os.ReadFile("testdata/menu_hoangs_kitchen.json")
+	require.NoError(t, err)
+
+	var menuNode any
+	require.NoError(t, json.Unmarshal(raw, &menuNode))
+
+	// The fixture is the subtree found at darray[125]; rebuild a darray
+	// large enough to hold it at that position.
+	darray := make([]any, 126)
+	darray[125] = menuNode
+
+	sections := getMenu(darray)
+	require.Len(t, sections, 21)
+
+	total := 0
+	for _, s := range sections {
+		total += len(s.Items)
+	}
+
+	require.Equal(t, 206, total)
+
+	require.Equal(t, "SPRING ROLLS", sections[0].Name)
+	require.Len(t, sections[0].Items, 6)
+	require.Equal(t, MenuItem{
+		Name:        "1. HOUSE-MADE FRIED SPRING ROLLS",
+		Description: "(shrimp, minced pork, wood-ear mushroom, shiitake mushroom, onion, garlic, carrot, green onion, glass noodle, sweet potato, taro)",
+	}, sections[0].Items[0])
+
+	last := sections[len(sections)-1]
+	require.Equal(t, "SOFT DRINKS", last.Name)
+	require.Equal(t, MenuItem{Name: "Fanta", Description: "(Orange)"}, last.Items[4])
+	require.Equal(t, MenuItem{Name: "Soda with Passion Fruit Juice"}, last.Items[len(last.Items)-1])
+}
+
+func TestGetMenuMissing(t *testing.T) {
+	require.Nil(t, getMenu(nil))
+	require.Nil(t, getMenu(make([]any, 200)))
+
+	darray := make([]any, 126)
+	darray[125] = []any{[]any{[]any{nil, []any{}}}}
+	require.Nil(t, getMenu(darray))
+}
+
+func TestGetHighlights(t *testing.T) {
+	raw, err := os.ReadFile("testdata/highlights_buddha_chay.json")
+	require.NoError(t, err)
+
+	var node any
+	require.NoError(t, json.Unmarshal(raw, &node))
+
+	// The fixture is the subtree found at darray[120]; rebuild a darray
+	// large enough to hold it at that position.
+	darray := make([]any, 121)
+	darray[120] = node
+
+	highlights := getHighlights(darray)
+	require.Len(t, highlights, 19)
+
+	first := highlights[0]
+	require.Equal(t, "Mango Sticky Rice", first.Name)
+	require.Equal(t, "/g/11m91ns0hc", first.ID)
+	require.True(t, strings.HasPrefix(first.Source, "https://www.google.com/local/place/offerings?"), first.Source)
+	require.Contains(t, first.Source, "oid=/g/11m91ns0hc")
+	require.Contains(t, first.Source, "on=Mango+Sticky+Rice")
+	require.Equal(t, 16, first.PhotoCount)
+	require.Equal(t, 4, first.ReviewCount)
+	require.Len(t, first.Photos, 3)
+
+	for _, p := range first.Photos {
+		require.True(t, strings.HasPrefix(p, "https://lh3.googleusercontent.com/"), p)
+	}
+
+	last := highlights[len(highlights)-1]
+	require.Equal(t, "Five Colored Soup", last.Name)
+	require.Equal(t, "/g/11vszpnfnq", last.ID)
+	require.Contains(t, last.Source, "on=Five+Colored+Soup")
+	require.Equal(t, 2, last.PhotoCount)
+	require.Equal(t, 0, last.ReviewCount)
+	require.Len(t, last.Photos, 1)
+
+	for _, h := range highlights {
+		require.NotEmpty(t, h.Name)
+		require.NotEmpty(t, h.Source)
+	}
+}
+
+func TestGetHighlightsMissing(t *testing.T) {
+	require.Nil(t, getHighlights(nil))
+	require.Nil(t, getHighlights(make([]any, 200)))
+
+	darray := make([]any, 121)
+	darray[120] = []any{nil, nil, nil, "", []any{[]any{1, []any{}}}}
+	require.Nil(t, getHighlights(darray))
 }

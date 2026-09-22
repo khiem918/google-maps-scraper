@@ -54,6 +54,26 @@ type About struct {
 	Options []Option `json:"options"`
 }
 
+type MenuItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type MenuSection struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	Items       []MenuItem `json:"items"`
+}
+
+type Highlight struct {
+	Name string `json:"name"`
+	ID string `json:"id,omitempty"`
+	Source string `json:"source,omitempty"`
+	Photos []string `json:"photos,omitempty"`
+	PhotoCount int `json:"photo_count"`
+	ReviewCount int `json:"review_count"`
+}
+
 type Review struct {
 	Name           string
 	ProfilePicture string
@@ -96,8 +116,6 @@ type Entry struct {
 	Category   string              `json:"category"`
 	Address    string              `json:"address"`
 	OpenHours  map[string][]string `json:"open_hours"`
-	// PopularTImes is a map with keys the days of the week
-	// and value is a map with key the hour and value the traffic in that time
 	PopularTimes     map[string]map[int]int `json:"popular_times"`
 	WebSite          string                 `json:"web_site"`
 	Phone            string                 `json:"phone"`
@@ -106,41 +124,33 @@ type Entry struct {
 	ReviewRating     float64                `json:"review_rating"`
 	ReviewsPerRating map[int]int            `json:"reviews_per_rating"`
 	Latitude         float64                `json:"latitude"`
-	// Longtitude holds the longitude. The struct field and the legacy JSON
-	// key are misspelled ("longtitude"); MarshalJSON also emits the correctly
-	// spelled "longitude" key, and UnmarshalJSON accepts either. The field
-	// name is kept for backwards compatibility with existing imports.
-	Longtitude          float64      `json:"longtitude"`
-	Status              string       `json:"status"`
-	Description         string       `json:"description"`
-	ReviewsLink         string       `json:"reviews_link"`
-	Thumbnail           string       `json:"thumbnail"`
-	Timezone            string       `json:"timezone"`
-	PriceRange          string       `json:"price_range"`
-	DataID              string       `json:"data_id"`
-	StreetViewURL       string       `json:"street_view_url"`
-	PlaceID             string       `json:"place_id"`
-	Images              []Image      `json:"images"`
-	Reservations        []LinkSource `json:"reservations"`
-	OrderOnline         []LinkSource `json:"order_online"`
-	Menu                LinkSource   `json:"menu"`
-	Owner               Owner        `json:"owner"`
-	CompleteAddress     Address      `json:"complete_address"`
-	CreditCardsAccepted []string     `json:"credit_cards_accepted"`
-	About               []About      `json:"about"`
-	UserReviews         []Review     `json:"user_reviews"`
-	UserReviewsExtended []Review     `json:"user_reviews_extended"`
-	Emails              []string     `json:"emails"`
+	Longtitude    float64      `json:"longtitude"`
+	Status        string       `json:"status"`
+	Description   string       `json:"description"`
+	ReviewsLink   string       `json:"reviews_link"`
+	Thumbnail     string       `json:"thumbnail"`
+	Timezone      string       `json:"timezone"`
+	PriceRange    string       `json:"price_range"`
+	DataID        string       `json:"data_id"`
+	StreetViewURL string       `json:"street_view_url"`
+	PlaceID       string       `json:"place_id"`
+	Images        []Image      `json:"images"`
+	Reservations  []LinkSource `json:"reservations"`
+	OrderOnline   []LinkSource `json:"order_online"`
+	Menu          LinkSource   `json:"menu"`
+	MenuItems []MenuSection `json:"menu_items"`
+	Highlights          []Highlight `json:"highlights"`
+	Owner               Owner       `json:"owner"`
+	CompleteAddress     Address     `json:"complete_address"`
+	CreditCardsAccepted []string    `json:"credit_cards_accepted"`
+	About               []About     `json:"about"`
+	UserReviews         []Review    `json:"user_reviews"`
+	UserReviewsExtended []Review    `json:"user_reviews_extended"`
+	Emails              []string    `json:"emails"`
 }
 
-// entryAlias is used inside Marshal/UnmarshalJSON to avoid infinite recursion
-// while still benefiting from the struct's json tags for every other field.
 type entryAlias Entry
 
-// MarshalJSON emits both the legacy "longtitude" key (preserved for backwards
-// compatibility) and the correctly spelled "longitude" key so downstream
-// consumers can migrate without a flag day.
-//
 //nolint:gocritic // value receiver preserves json.Marshaler behavior for Entry values.
 func (e Entry) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
@@ -152,9 +162,6 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// UnmarshalJSON accepts either "longtitude" (legacy) or "longitude" (preferred)
-// as the longitude key. "longtitude" wins when both are present so existing
-// data files keep round-tripping byte-identical.
 func (e *Entry) UnmarshalJSON(data []byte) error {
 	aux := struct {
 		Longitude *float64 `json:"longitude"`
@@ -263,6 +270,8 @@ func (e *Entry) CsvHeaders() []string {
 		"reservations",
 		"order_online",
 		"menu",
+		"menu_items",
+		"highlights",
 		"owner",
 		"complete_address",
 		"credit_cards_accepted",
@@ -304,6 +313,8 @@ func (e *Entry) CsvRow() []string {
 		stringify(e.Reservations),
 		stringify(e.OrderOnline),
 		stringify(e.Menu),
+		stringify(e.MenuItems),
+		stringify(e.Highlights),
 		stringify(e.Owner),
 		stringify(e.CompleteAddress),
 		stringSliceToString(e.CreditCardsAccepted),
@@ -469,6 +480,9 @@ func EntryFromJSON(raw []byte, reviewCountOnly ...bool) (entry Entry, err error)
 		Link:   getNthElementAndCast[string](darray, 38, 0),
 		Source: getNthElementAndCast[string](darray, 38, 1),
 	}
+
+	entry.MenuItems = getMenu(darray)
+	entry.Highlights = getHighlights(darray)
 
 	entry.Owner = Owner{
 		ID:   getNthElementAndCast[string](darray, 57, 2),
@@ -854,6 +868,115 @@ func getPopularTimes(darray []any) map[string]map[int]int {
 	}
 
 	return popularTimes
+}
+
+func getMenu(darray []any) []MenuSection {
+	sectionsI := getNthElementAndCast[[]any](darray, 125, 0, 0, 1) //nolint:mnd // positional indexes
+	if len(sectionsI) == 0 {
+		return nil
+	}
+
+	sections := make([]MenuSection, 0, len(sectionsI))
+
+	for _, sectionI := range sectionsI {
+		sectionArr, ok := sectionI.([]any)
+		if !ok {
+			continue
+		}
+
+		section := MenuSection{
+			Name:        getNthElementAndCast[string](sectionArr, 0, 0),
+			Description: getNthElementAndCast[string](sectionArr, 0, 1),
+		}
+
+		for _, groupI := range getNthElementAndCast[[]any](sectionArr, 1) {
+			group, ok := groupI.([]any)
+			if !ok {
+				continue
+			}
+
+			for _, itemI := range group {
+				item, ok := itemI.([]any)
+				if !ok {
+					continue
+				}
+
+				name := getNthElementAndCast[string](item, 0, 0)
+				if name == "" {
+					continue
+				}
+
+				section.Items = append(section.Items, MenuItem{
+					Name:        name,
+					Description: getNthElementAndCast[string](item, 0, 1),
+				})
+			}
+		}
+
+		if section.Name == "" && len(section.Items) == 0 {
+			continue
+		}
+
+		sections = append(sections, section)
+	}
+
+	if len(sections) == 0 {
+		return nil
+	}
+
+	return sections
+}
+
+
+func getHighlights(darray []any) []Highlight {
+	groups := getNthElementAndCast[[]any](darray, 120, 4) //nolint:mnd // positional indexes
+	if len(groups) == 0 {
+		return nil
+	}
+
+	var highlights []Highlight
+
+	for _, groupI := range groups {
+		group, ok := groupI.([]any)
+		if !ok {
+			continue
+		}
+
+		for _, itemI := range getNthElementAndCast[[]any](group, 1) {
+			item, ok := itemI.([]any)
+			if !ok {
+				continue
+			}
+
+			name := getNthElementAndCast[string](item, 4) //nolint:mnd // positional index
+			if name == "" {
+				continue
+			}
+
+			h := Highlight{
+				Name:        name,
+				ID:          getNthElementAndCast[string](item, 15),       //nolint:mnd // positional index
+				Source:      getNthElementAndCast[string](item, 20, 3, 0), //nolint:mnd // positional indexes
+				PhotoCount:  int(getNthElementAndCast[float64](item, 17)), //nolint:mnd // positional index
+				ReviewCount: int(getNthElementAndCast[float64](item, 13)), //nolint:mnd // positional index
+			}
+
+			for _, photoI := range getNthElementAndCast[[]any](item, 6) { //nolint:mnd // positional index
+				photo, ok := photoI.([]any)
+				if !ok {
+					continue
+				}
+
+				if u := getNthElementAndCast[string](photo, 6, 0); u != "" { //nolint:mnd // positional indexes
+					h.Photos = append(h.Photos, u)
+				}
+			}
+
+			highlights = append(highlights, h)
+		}
+	}
+
+	return highlights
 }
 
 func getNthElementAndCast[T any](arr []any, indexes ...int) T {

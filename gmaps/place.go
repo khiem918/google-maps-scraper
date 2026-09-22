@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"uuid"
@@ -210,6 +212,8 @@ func (j *PlaceJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPa
 		return resp
 	}
 
+	dumpTextDebug(j.ID, page)
+
 	if resp.Meta == nil {
 		resp.Meta = make(map[string]any)
 	}
@@ -314,10 +318,55 @@ func (j *PlaceJob) extractJSON(page scrapemate.BrowserPage) ([]byte, error) {
 
 		raw = strings.TrimSpace(strings.TrimPrefix(raw, prefix))
 
+		dumpRawDebug(j.ID, []byte(raw))
+
 		return []byte(raw), nil
 	}
 
 	return nil, fmt.Errorf("APP_INITIALIZATION_STATE data not found after retries")
+}
+
+// dumpRawDebug writes the raw, unparsed APP_INITIALIZATION_STATE blob to
+// /out/raw-<jobID>.json when GMAPS_DEBUG_DUMP_RAW=1, so the darray indexes
+// EntryFromJSON relies on can be located by hand when Google reshuffles them.
+// No-op otherwise. Temporary debugging aid — remove before merging upstream.
+func dumpRawDebug(jobID string, raw []byte) {
+	if os.Getenv("GMAPS_DEBUG_DUMP_RAW") != "1" {
+		return
+	}
+
+	path := filepath.Join("/out", fmt.Sprintf("raw-%s.json", jobID))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		log.Printf("DEBUG: failed to write raw dump %s: %v", path, err)
+	}
+}
+
+// dumpTextDebug writes the rendered page's visible text (document.body.innerText)
+// to /out/text-<jobID>.txt when GMAPS_DEBUG_DUMP_RAW=1. Unlike dumpRawDebug this
+// captures everything actually shown on screen in human-readable form — useful
+// for locating UI-only content (e.g. "Popular dishes") that isn't easy to spot
+// inside the positional darray. No-op otherwise. Temporary debugging aid —
+// remove before merging upstream.
+func dumpTextDebug(jobID string, page scrapemate.BrowserPage) {
+	if os.Getenv("GMAPS_DEBUG_DUMP_RAW") != "1" {
+		return
+	}
+
+	textI, err := page.Eval(`() => document.body.innerText`)
+	if err != nil {
+		log.Printf("DEBUG: failed to eval body innerText: %v", err)
+		return
+	}
+
+	text, ok := textI.(string)
+	if !ok {
+		return
+	}
+
+	path := filepath.Join("/out", fmt.Sprintf("text-%s.txt", jobID))
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		log.Printf("DEBUG: failed to write text dump %s: %v", path, err)
+	}
 }
 
 func (j *PlaceJob) getReviewCount(data []byte) int {
