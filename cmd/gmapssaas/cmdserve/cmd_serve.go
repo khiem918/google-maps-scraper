@@ -71,10 +71,21 @@ var Command = &cli.Command{
 			Sources:  cli.EnvVars(saas.EnvEncryptionKey),
 			Required: true,
 		},
+		&cli.BoolFlag{
+			Name:    "disable-api-auth",
+			Usage:   "Serve /api/v1/* without API key validation. Only safe on a network the caller does not control (e.g. an internal microservice network with no public exposure).",
+			Value:   false,
+			Sources: cli.EnvVars(saas.EnvDisableAPIAuth),
+		},
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		addr := cmd.String("addr")
 		dsn := cmd.String("database-url")
+		disableAPIAuth := cmd.Bool("disable-api-auth")
+
+		if disableAPIAuth {
+			log.Warn("DISABLE_API_AUTH is set: /api/v1/* is serving without API key validation")
+		}
 
 		// Connect to database
 		dbPool, err := postgres.Connect(ctx, dsn,
@@ -155,7 +166,7 @@ var Command = &cli.Command{
 
 		// Setup API routes (in a group so middleware can be added)
 		mainRouter.Group(func(r chi.Router) {
-			api.Routes(r, apiState)
+			api.Routes(r, apiState, disableAPIAuth)
 		})
 
 		// Swagger UI
