@@ -35,12 +35,18 @@ func NewAppState(queue *rqueue.Client, store IStore) *AppState {
 	}
 }
 
-// Routes sets up API routes on the given router.
-func Routes(r chi.Router, appState *AppState) {
+// Routes sets up API routes on the given router. When disableAuth is true,
+// the /api/v1/* endpoints are served without API key validation — intended
+// only for deployments where the network already restricts access (e.g. a
+// private microservice network with no public exposure).
+func Routes(r chi.Router, appState *AppState, disableAuth bool) {
 	r.Use(httpext.LoggingMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(120 * time.Second))
-	r.Use(KeyAuth(appState.Store.ValidateAPIKey))
+
+	if !disableAuth {
+		r.Use(KeyAuth(appState.Store.ValidateAPIKey))
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", healthCheckHandler(appState))

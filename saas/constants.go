@@ -13,6 +13,7 @@ const (
 	EnvDBMaxConnLifetime = "DB_MAX_CONN_LIFETIME"
 	EnvDBMaxConnIdleTime = "DB_MAX_CONN_IDLE_TIME"
 	EnvEncryptionKey     = "ENCRYPTION_KEY"
+	EnvDisableAPIAuth    = "DISABLE_API_AUTH"
 
 	// Worker
 	EnvConcurrency     = "CONCURRENCY"
