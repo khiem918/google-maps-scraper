@@ -18,8 +18,6 @@ import (
 	"github.com/gosom/google-maps-scraper/runner/resume"
 	"github.com/gosom/google-maps-scraper/tlmt"
 	"github.com/gosom/scrapemate"
-	"github.com/gosom/scrapemate/adapters/writers/csvwriter"
-	"github.com/gosom/scrapemate/adapters/writers/jsonwriter"
 	"github.com/gosom/scrapemate/scrapemateapp"
 )
 
@@ -225,17 +223,12 @@ func (r *fileRunner) seedJobOptions() []runner.SeedJobOption {
 }
 
 func (r *fileRunner) setInput() error {
-	switch r.cfg.InputFile {
-	case "stdin":
-		r.input = os.Stdin
-	default:
-		f, err := os.Open(r.cfg.InputFile)
-		if err != nil {
-			return err
-		}
-
-		r.input = f
+	input, err := runner.OpenInput(r.cfg.InputFile)
+	if err != nil {
+		return err
 	}
+
+	r.input = input
 
 	return nil
 }
@@ -308,11 +301,8 @@ func (r *fileRunner) setWriters() error {
 					r.outfile.Sync,
 				))
 			}
-		case r.cfg.JSON:
-			r.writers = append(r.writers, jsonwriter.NewJSONWriter(resultsWriter))
 		default:
-			csvWriter := csvwriter.NewCsvWriter(csv.NewWriter(resultsWriter))
-			r.writers = append(r.writers, csvWriter)
+			r.writers = append(r.writers, runner.NewResultWriter(resultsWriter, r.cfg.JSON))
 		}
 	}
 
@@ -385,52 +375,12 @@ func (r *fileRunner) shouldWriteCSVHeader() (bool, error) {
 }
 
 func (r *fileRunner) setApp() error {
-	opts := []func(*scrapemateapp.Config) error{
-		// scrapemateapp.WithCache("leveldb", "cache"),
-		scrapemateapp.WithConcurrency(r.cfg.Concurrency),
-		scrapemateapp.WithExitOnInactivity(r.cfg.ExitOnInactivityDuration),
-	}
-
-	if len(r.cfg.Proxies) > 0 {
-		opts = append(opts,
-			scrapemateapp.WithProxies(r.cfg.Proxies),
-		)
-	}
-
-	if !r.cfg.FastMode {
-		if r.cfg.Debug {
-			opts = append(opts, scrapemateapp.WithJS(
-				scrapemateapp.Headfull(),
-				scrapemateapp.DisableImages(),
-			))
-		} else {
-			opts = append(opts, scrapemateapp.WithJS(scrapemateapp.DisableImages()))
-		}
-	} else {
-		opts = append(opts, scrapemateapp.WithStealth("firefox"))
-	}
-
-	opts = runner.AppendBrowserCapacityOptions(opts, r.cfg)
-
-	if !r.cfg.DisablePageReuse {
-		opts = append(opts,
-			scrapemateapp.WithPageReuseLimit(2),
-			scrapemateapp.WithBrowserReuseLimit(200),
-		)
-	}
-
-	matecfg, err := scrapemateapp.NewConfig(
-		r.writers,
-		opts...,
-	)
+	app, err := runner.NewScrapemateApp(r.cfg, r.writers)
 	if err != nil {
 		return err
 	}
 
-	r.app, err = scrapemateapp.NewScrapeMateApp(matecfg)
-	if err != nil {
-		return err
-	}
+	r.app = app
 
 	return nil
 }

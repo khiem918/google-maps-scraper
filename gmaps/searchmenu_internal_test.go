@@ -12,6 +12,8 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/gosom/scrapemate"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gosom/google-maps-scraper/exiter"
 )
 
 const (
@@ -357,6 +359,38 @@ func TestMenuJobDegradedPageTripsBreaker(t *testing.T) {
 	}
 
 	require.False(t, breaker.Allow())
+}
+
+// countingExiter records completed places; the other methods are unused here.
+type countingExiter struct {
+	exiter.Exiter
+
+	placesCompleted int
+}
+
+func (e *countingExiter) IncrPlacesCompleted(val int) {
+	e.placesCompleted += val
+}
+
+func TestMenuJobSkipsSearchOnceBreakerTripped(t *testing.T) {
+	breaker := NewMenuBreaker(1, 1)
+	require.True(t, breaker.RecordBlocked())
+
+	entry := Entry{Title: "Busan", DataID: busanDataID}
+	exitMonitor := &countingExiter{}
+	job := NewMenuJob("parent", "vi", &entry, WithMenuJobBreaker(breaker), WithMenuJobExitMonitor(exitMonitor))
+
+	// The page is never touched when the breaker has tripped.
+	resp := job.BrowserActions(context.Background(), nil)
+	require.ErrorIs(t, resp.Error, errMenuDisabled)
+
+	got, next, err := job.Process(context.Background(), &resp)
+
+	require.NoError(t, err)
+	require.Empty(t, next)
+	require.Same(t, &entry, got)
+	require.Nil(t, entry.MenuItems)
+	require.Equal(t, 1, exitMonitor.placesCompleted)
 }
 
 func TestMenuJobDegradedPageDoesNotResetBlockedStreak(t *testing.T) {

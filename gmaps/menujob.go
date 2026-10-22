@@ -31,6 +31,10 @@ const (
 
 var errMenuSearchBlocked = errors.New("google search blocked the menu request")
 
+// errMenuDisabled marks a job that skipped Google Search because its breaker
+// had already tripped.
+var errMenuDisabled = errors.New("menu extraction disabled")
+
 // menuButtonsJS returns the texts of the knowledge-panel async buttons.
 const menuButtonsJS = `() => [...document.querySelectorAll('[role=button][data-async-ons]')].map(b => b.innerText || '')`
 
@@ -178,6 +182,10 @@ func (j *MenuJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) {
 	logger := scrapemate.GetLoggerFromContext(ctx)
 
+	if errors.Is(resp.Error, errMenuDisabled) {
+		return
+	}
+
 	body := string(resp.Body)
 
 	if errors.Is(resp.Error, errMenuSearchBlocked) || isSearchBlocked(resp.URL, body) {
@@ -238,6 +246,13 @@ func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) {
 
 func (j *MenuJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPage) scrapemate.Response {
 	var resp scrapemate.Response
+
+	// Jobs queued before the breaker tripped must not keep hitting Google.
+	if !j.Breaker.Allow() {
+		resp.Error = errMenuDisabled
+
+		return resp
+	}
 
 	restoreUA := overrideSearchUserAgent(page)
 	defer restoreUA()
