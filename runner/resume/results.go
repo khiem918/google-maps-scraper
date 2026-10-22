@@ -238,6 +238,9 @@ func loadJSONLIdentities(r io.Reader, ids *IdentitySet) error {
 
 func loadCSVIdentities(r io.Reader, ids *IdentitySet) error {
 	reader := csv.NewReader(r)
+	// Results written by older versions have fewer columns than rows appended
+	// by newer ones; columns are resolved by header name, so allow both.
+	reader.FieldsPerRecord = -1
 
 	headers, err := reader.Read()
 	if err != nil {

@@ -28,6 +28,24 @@ func TestLoadCSVIdentities(t *testing.T) {
 	require.True(t, ids.Has("data-b"))
 }
 
+func TestLoadCSVIdentitiesAcceptsMixedColumnCounts(t *testing.T) {
+	t.Parallel()
+
+	// A results file started by an older version (fewer columns) and resumed
+	// by a newer one (extra trailing columns).
+	path := filepath.Join(t.TempDir(), "results.csv")
+	body := "input_id,link,title,cid,data_id,place_id\n" +
+		"q1,https://maps/place/a,A,cid-a,data-a,place-a\n" +
+		"q2,https://maps/place/b,B,cid-b,data-b,place-b,[],{}\n"
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	ids, err := resume.LoadResultIdentities(path, false)
+
+	require.NoError(t, err)
+	require.True(t, ids.Has("place-a"))
+	require.True(t, ids.Has("place-b"))
+}
+
 func TestLoadJSONLIdentities(t *testing.T) {
 	t.Parallel()
 

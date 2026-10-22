@@ -23,6 +23,7 @@ type seedJobConfig struct {
 	completedInputSkipper func(string) bool
 	completionTracker     gmaps.CompletionTracker
 	deterministicIDs      bool
+	menuBreaker           *gmaps.MenuBreaker
 }
 
 // SeedJobOption configures seed job creation.
@@ -39,6 +40,13 @@ func WithCompletedInputSkipper(skipper func(string) bool) SeedJobOption {
 func WithCompletionTracker(tracker gmaps.CompletionTracker) SeedJobOption {
 	return func(cfg *seedJobConfig) {
 		cfg.completionTracker = tracker
+	}
+}
+
+// WithMenuExtraction enables Google Search menu extraction for created jobs.
+func WithMenuExtraction(breaker *gmaps.MenuBreaker) SeedJobOption {
+	return func(cfg *seedJobConfig) {
+		cfg.menuBreaker = breaker
 	}
 }
 
@@ -146,6 +154,10 @@ func CreateSeedJobs(
 
 			if createCfg.completionTracker != nil {
 				opts = append(opts, gmaps.WithGmapCompletionTracker(createCfg.completionTracker))
+			}
+
+			if createCfg.menuBreaker != nil {
+				opts = append(opts, gmaps.WithMenuExtraction(createCfg.menuBreaker))
 			}
 
 			job = gmaps.NewGmapJob(id, langCode, query, maxDepth, email, geoCoordinates, zoom, opts...)
@@ -262,6 +274,10 @@ func CreateGridSeedJobs(
 
 			if createCfg.completionTracker != nil {
 				opts = append(opts, gmaps.WithGmapCompletionTracker(createCfg.completionTracker))
+			}
+
+			if createCfg.menuBreaker != nil {
+				opts = append(opts, gmaps.WithMenuExtraction(createCfg.menuBreaker))
 			}
 
 			job := gmaps.NewGmapJob(

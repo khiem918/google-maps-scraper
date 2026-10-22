@@ -48,6 +48,9 @@ func StripNULFromEntry(entry *gmaps.Entry) {
 	cleanLinkSources(entry.Reservations)
 	cleanLinkSources(entry.OrderOnline)
 	cleanLinkSource(&entry.Menu)
+	cleanMenuSections(entry.MenuItems)
+	cleanPopularDishes(entry.PopularDishes)
+	cleanMenuPhotos(&entry.MenuPhotos)
 	cleanOwner(&entry.Owner)
 	cleanAddress(&entry.CompleteAddress)
 	cleanAbout(entry.About)
@@ -115,6 +118,38 @@ func cleanLinkSource(item *gmaps.LinkSource) {
 
 	item.Link = cleanString(item.Link)
 	item.Source = cleanString(item.Source)
+}
+
+func cleanMenuSections(sections []gmaps.MenuSection) {
+	for i := range sections {
+		sections[i].Name = cleanString(sections[i].Name)
+		sections[i].Description = cleanString(sections[i].Description)
+
+		for j := range sections[i].Items {
+			item := &sections[i].Items[j]
+			item.Name = cleanString(item.Name)
+			item.Description = cleanString(item.Description)
+			item.Price = cleanString(item.Price)
+		}
+	}
+}
+
+func cleanPopularDishes(items []gmaps.PopularDish) {
+	for i := range items {
+		items[i].Name = cleanString(items[i].Name)
+		items[i].Label = cleanString(items[i].Label)
+		items[i].Image = cleanString(items[i].Image)
+		items[i].EntityID = cleanString(items[i].EntityID)
+	}
+}
+
+func cleanMenuPhotos(photos *gmaps.MenuPhotos) {
+	if photos == nil {
+		return
+	}
+
+	photos.Source = cleanString(photos.Source)
+	cleanStringSlice(photos.Images)
 }
 
 func cleanOwner(owner *gmaps.Owner) {

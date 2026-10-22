@@ -57,6 +57,7 @@ type About struct {
 type MenuItem struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	Price       string `json:"price,omitempty"`
 }
 
 type MenuSection struct {
@@ -65,13 +66,30 @@ type MenuSection struct {
 	Items       []MenuItem `json:"items"`
 }
 
+// PopularDish is a dish highlighted in the Google Search menu panel.
+type PopularDish struct {
+	Name     string `json:"name"`
+	Label    string `json:"label,omitempty"`
+	Image    string `json:"image,omitempty"`
+	EntityID string `json:"entity_id,omitempty"`
+}
+
+// MenuPhotos describes the menu photo carousel of the Google Search menu panel.
+// Google only embeds base64 thumbnails, so Images holds the http(s) URLs that
+// happen to be present and Source is the page opened by clicking a photo.
+type MenuPhotos struct {
+	Count  int      `json:"count"`
+	Images []string `json:"images,omitempty"`
+	Source string   `json:"source,omitempty"`
+}
+
 type Highlight struct {
-	Name string `json:"name"`
-	ID string `json:"id,omitempty"`
-	Source string `json:"source,omitempty"`
-	Photos []string `json:"photos,omitempty"`
-	PhotoCount int `json:"photo_count"`
-	ReviewCount int `json:"review_count"`
+	Name        string   `json:"name"`
+	ID          string   `json:"id,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Photos      []string `json:"photos,omitempty"`
+	PhotoCount  int      `json:"photo_count"`
+	ReviewCount int      `json:"review_count"`
 }
 
 type Review struct {
@@ -108,45 +126,47 @@ const reviewPublishedAtFutureSkew = 24 * time.Hour
 var earliestReviewPublishedAt = time.Date(2007, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 type Entry struct {
-	ID         string              `json:"input_id"`
-	Link       string              `json:"link"`
-	Cid        string              `json:"cid"`
-	Title      string              `json:"title"`
-	Categories []string            `json:"categories"`
-	Category   string              `json:"category"`
-	Address    string              `json:"address"`
-	OpenHours  map[string][]string `json:"open_hours"`
-	PopularTimes     map[string]map[int]int `json:"popular_times"`
-	WebSite          string                 `json:"web_site"`
-	Phone            string                 `json:"phone"`
-	PlusCode         string                 `json:"plus_code"`
-	ReviewCount      int                    `json:"review_count"`
-	ReviewRating     float64                `json:"review_rating"`
-	ReviewsPerRating map[int]int            `json:"reviews_per_rating"`
-	Latitude         float64                `json:"latitude"`
-	Longtitude    float64      `json:"longtitude"`
-	Status        string       `json:"status"`
-	Description   string       `json:"description"`
-	ReviewsLink   string       `json:"reviews_link"`
-	Thumbnail     string       `json:"thumbnail"`
-	Timezone      string       `json:"timezone"`
-	PriceRange    string       `json:"price_range"`
-	DataID        string       `json:"data_id"`
-	StreetViewURL string       `json:"street_view_url"`
-	PlaceID       string       `json:"place_id"`
-	Images        []Image      `json:"images"`
-	Reservations  []LinkSource `json:"reservations"`
-	OrderOnline   []LinkSource `json:"order_online"`
-	Menu          LinkSource   `json:"menu"`
-	MenuItems []MenuSection `json:"menu_items"`
-	Highlights          []Highlight `json:"highlights"`
-	Owner               Owner       `json:"owner"`
-	CompleteAddress     Address     `json:"complete_address"`
-	CreditCardsAccepted []string    `json:"credit_cards_accepted"`
-	About               []About     `json:"about"`
-	UserReviews         []Review    `json:"user_reviews"`
-	UserReviewsExtended []Review    `json:"user_reviews_extended"`
-	Emails              []string    `json:"emails"`
+	ID                  string                 `json:"input_id"`
+	Link                string                 `json:"link"`
+	Cid                 string                 `json:"cid"`
+	Title               string                 `json:"title"`
+	Categories          []string               `json:"categories"`
+	Category            string                 `json:"category"`
+	Address             string                 `json:"address"`
+	OpenHours           map[string][]string    `json:"open_hours"`
+	PopularTimes        map[string]map[int]int `json:"popular_times"`
+	WebSite             string                 `json:"web_site"`
+	Phone               string                 `json:"phone"`
+	PlusCode            string                 `json:"plus_code"`
+	ReviewCount         int                    `json:"review_count"`
+	ReviewRating        float64                `json:"review_rating"`
+	ReviewsPerRating    map[int]int            `json:"reviews_per_rating"`
+	Latitude            float64                `json:"latitude"`
+	Longtitude          float64                `json:"longtitude"`
+	Status              string                 `json:"status"`
+	Description         string                 `json:"description"`
+	ReviewsLink         string                 `json:"reviews_link"`
+	Thumbnail           string                 `json:"thumbnail"`
+	Timezone            string                 `json:"timezone"`
+	PriceRange          string                 `json:"price_range"`
+	DataID              string                 `json:"data_id"`
+	StreetViewURL       string                 `json:"street_view_url"`
+	PlaceID             string                 `json:"place_id"`
+	Images              []Image                `json:"images"`
+	Reservations        []LinkSource           `json:"reservations"`
+	OrderOnline         []LinkSource           `json:"order_online"`
+	Menu                LinkSource             `json:"menu"`
+	MenuItems           []MenuSection          `json:"menu_items"`
+	PopularDishes       []PopularDish          `json:"popular_dishes"`
+	MenuPhotos          MenuPhotos             `json:"menu_photos"`
+	Highlights          []Highlight            `json:"highlights"`
+	Owner               Owner                  `json:"owner"`
+	CompleteAddress     Address                `json:"complete_address"`
+	CreditCardsAccepted []string               `json:"credit_cards_accepted"`
+	About               []About                `json:"about"`
+	UserReviews         []Review               `json:"user_reviews"`
+	UserReviewsExtended []Review               `json:"user_reviews_extended"`
+	Emails              []string               `json:"emails"`
 }
 
 type entryAlias Entry
@@ -279,6 +299,8 @@ func (e *Entry) CsvHeaders() []string {
 		"user_reviews",
 		"user_reviews_extended",
 		"emails",
+		"popular_dishes",
+		"menu_photos",
 	}
 }
 
@@ -322,6 +344,8 @@ func (e *Entry) CsvRow() []string {
 		stringify(e.UserReviews),
 		stringify(e.UserReviewsExtended),
 		stringSliceToString(e.Emails),
+		stringify(e.PopularDishes),
+		stringify(e.MenuPhotos),
 	}
 }
 
@@ -926,7 +950,6 @@ func getMenu(darray []any) []MenuSection {
 
 	return sections
 }
-
 
 func getHighlights(darray []any) []Highlight {
 	groups := getNthElementAndCast[[]any](darray, 120, 4) //nolint:mnd // positional indexes

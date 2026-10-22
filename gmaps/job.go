@@ -35,6 +35,8 @@ type GmapJob struct {
 	ExtractExtraReviews     bool
 	WriterManagedCompletion bool
 	CompletionTracker       CompletionTracker
+	ExtractMenu             bool
+	MenuBreaker             *MenuBreaker
 }
 
 func NewGmapJob(
@@ -119,6 +121,14 @@ func WithGmapCompletionTracker(tracker CompletionTracker) GmapJobOptions {
 	}
 }
 
+// WithMenuExtraction enables Google Search menu extraction for found places.
+func WithMenuExtraction(b *MenuBreaker) GmapJobOptions {
+	return func(j *GmapJob) {
+		j.ExtractMenu = true
+		j.MenuBreaker = b
+	}
+}
+
 func (j *GmapJob) UseInResults() bool {
 	return false
 }
@@ -164,6 +174,10 @@ func (j *GmapJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 			jopts = append(jopts, WithPlaceJobWriterManagedCompletion())
 		}
 
+		if j.ExtractMenu {
+			jopts = append(jopts, WithPlaceJobMenuExtraction(j.MenuBreaker))
+		}
+
 		placeJob := NewPlaceJob(j.ID, j.LangCode, resp.URL, j.ExtractEmail, j.ExtractExtraReviews, jopts...)
 
 		next = append(next, placeJob)
@@ -177,6 +191,10 @@ func (j *GmapJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 
 				if j.WriterManagedCompletion {
 					jopts = append(jopts, WithPlaceJobWriterManagedCompletion())
+				}
+
+				if j.ExtractMenu {
+					jopts = append(jopts, WithPlaceJobMenuExtraction(j.MenuBreaker))
 				}
 
 				nextJob := NewPlaceJob(j.ID, j.LangCode, href, j.ExtractEmail, j.ExtractExtraReviews, jopts...)
