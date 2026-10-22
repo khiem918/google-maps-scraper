@@ -26,6 +26,8 @@ type PlaceJob struct {
 	ExitMonitor             exiter.Exiter
 	ExtractExtraReviews     bool
 	WriterManagedCompletion bool
+	ExtractMenu             bool
+	MenuBreaker             *MenuBreaker
 }
 
 func NewPlaceJob(parentID, langCode, u string, extractEmail, extraExtraReviews bool, opts ...PlaceJobOptions) *PlaceJob {
@@ -99,6 +101,14 @@ func WithPlaceJobWriterManagedCompletion() PlaceJobOptions {
 	}
 }
 
+// WithPlaceJobMenuExtraction chains a MenuJob after the place is scraped.
+func WithPlaceJobMenuExtraction(b *MenuBreaker) PlaceJobOptions {
+	return func(j *PlaceJob) {
+		j.ExtractMenu = true
+		j.MenuBreaker = b
+	}
+}
+
 func (j *PlaceJob) ProcessOnFetchError() bool {
 	return true
 }
@@ -160,6 +170,27 @@ func (j *PlaceJob) Process(_ context.Context, resp *scrapemate.Response) (any, [
 		}
 
 		entry.UserReviewsExtended = append(entry.UserReviewsExtended, deduped...)
+	}
+
+	if j.ExtractMenu && j.MenuBreaker.Allow() && buildMenuSearchQuery(&entry) != "" {
+		mopts := []MenuJobOptions{WithMenuJobBreaker(j.MenuBreaker)}
+		if j.ExtractEmail {
+			mopts = append(mopts, WithMenuJobEmail())
+		}
+
+		if j.ExitMonitor != nil {
+			mopts = append(mopts, WithMenuJobExitMonitor(j.ExitMonitor))
+		}
+
+		if j.WriterManagedCompletion {
+			mopts = append(mopts, WithMenuJobWriterManagedCompletion())
+		}
+
+		menuJob := NewMenuJob(j.ID, j.URLParams[languageQueryParam], &entry, mopts...)
+
+		j.UsageInResults = false
+
+		return nil, []scrapemate.IJob{menuJob}, nil
 	}
 
 	if j.ExtractEmail && entry.IsWebsiteValidForEmail() {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gosom/google-maps-scraper/deduper"
 	"github.com/gosom/google-maps-scraper/exiter"
+	"github.com/gosom/google-maps-scraper/gmaps"
 	"github.com/gosom/google-maps-scraper/grid"
 	"github.com/gosom/google-maps-scraper/leadsdb"
 	"github.com/gosom/google-maps-scraper/runner"
@@ -20,6 +21,17 @@ import (
 	"github.com/gosom/scrapemate/adapters/writers/csvwriter"
 	"github.com/gosom/scrapemate/adapters/writers/jsonwriter"
 	"github.com/gosom/scrapemate/scrapemateapp"
+)
+
+const (
+	// menuBlockedThreshold is how many consecutive captcha pages from Google
+	// Search disable menu extraction for the rest of the run.
+	menuBlockedThreshold = 3
+	// menuNoPanelThreshold is how many consecutive Google Search pages without
+	// a place knowledge panel (a sign of rate limiting) disable menu extraction.
+	// Higher than menuBlockedThreshold because a single place may legitimately
+	// lack a panel.
+	menuNoPanelThreshold = 5
 )
 
 type fileRunner struct {
@@ -111,6 +123,10 @@ func (r *fileRunner) Run(ctx context.Context) (err error) {
 	exitMonitor := exiter.New()
 	seedOpts := r.seedJobOptions()
 
+	if r.cfg.Menu && r.cfg.FastMode {
+		fmt.Fprintln(os.Stderr, "warning: -menu is ignored with -fast-mode")
+	}
+
 	if r.cfg.GridBBox != "" {
 		if r.cfg.FastMode {
 			return fmt.Errorf("-fast-mode cannot be used together with -grid-bbox")
@@ -191,15 +207,21 @@ func (r *fileRunner) Close(context.Context) error {
 }
 
 func (r *fileRunner) seedJobOptions() []runner.SeedJobOption {
-	if !r.cfg.Resume {
-		return nil
+	var opts []runner.SeedJobOption
+
+	if r.cfg.Resume {
+		opts = append(opts,
+			runner.WithDeterministicSeedIDs(),
+			runner.WithCompletedInputSkipper(r.resumeState.IsInputCompleted),
+			runner.WithCompletionTracker(r.resumeProgress),
+		)
 	}
 
-	return []runner.SeedJobOption{
-		runner.WithDeterministicSeedIDs(),
-		runner.WithCompletedInputSkipper(r.resumeState.IsInputCompleted),
-		runner.WithCompletionTracker(r.resumeProgress),
+	if r.cfg.Menu {
+		opts = append(opts, runner.WithMenuExtraction(gmaps.NewMenuBreaker(menuBlockedThreshold, menuNoPanelThreshold)))
 	}
+
+	return opts
 }
 
 func (r *fileRunner) setInput() error {

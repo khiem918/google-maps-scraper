@@ -273,6 +273,7 @@ Useful options:
 | Extract emails from business websites | `-email` |
 | Write JSON instead of CSV | `-json -results /out/results.json` |
 | Collect extra reviews | `-extra-reviews -json -results /out/results.json` |
+| Extract menus (sections, prices, popular dishes) via Google Search | `-menu -json -results /out/results.json` |
 | Resume an interrupted file scrape | `-resume -results /out/results.csv` |
 | Increase concurrency | `-c 4`, `-c 8`, or `-c 16` |
 | Run multiple pages per browser | `-pages-per-browser 4` |
@@ -462,6 +463,10 @@ go build
 | 34 | `user_reviews` | Customer reviews (text, rating, timestamp) |
 | 35 | `user_reviews_extended` | Extended reviews up to ~300 (requires `-extra-reviews`) |
 | 36 | `emails` | Extracted email addresses (requires `-email` flag) |
+| 37 | `popular_dishes` | Popular dishes with name, label and image (requires `-menu`) |
+| 38 | `menu_photos` | Menu photo count and source page (requires `-menu`) |
+
+With `-menu`, `menu_items` holds every tab of the Google Search menu panel (e.g. "At a Glance", "Topping") with item names, prices and descriptions.
 
 </details>
 
@@ -501,6 +506,8 @@ Core Options:
 Email & Reviews:
   -email             Extract emails from business websites
   -extra-reviews     Collect extended reviews (up to ~300)
+  -menu              Extract menu tabs, prices, popular dishes and menu photos
+                     via Google Search (one extra request per place)
 
 Location Settings:
   -lang string       Language code, e.g., 'de' for German (default: "en")

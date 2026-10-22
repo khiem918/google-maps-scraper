@@ -151,3 +151,77 @@ type recordingSeedTracker struct{}
 func (t *recordingSeedTracker) SeedDiscovered(string, int) error {
 	return nil
 }
+
+func TestCreateSeedJobsAttachesMenuExtraction(t *testing.T) {
+	t.Parallel()
+
+	breaker := gmaps.NewMenuBreaker(3, 5)
+
+	jobs, err := runner.CreateSeedJobs(
+		false,
+		"en",
+		strings.NewReader("pizza\n"),
+		10,
+		false,
+		"",
+		15,
+		10000,
+		nil,
+		nil,
+		false,
+		runner.WithMenuExtraction(breaker),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	job, ok := jobs[0].(*gmaps.GmapJob)
+	if !ok {
+		t.Fatalf("expected *gmaps.GmapJob, got %T", jobs[0])
+	}
+
+	if !job.ExtractMenu || job.MenuBreaker != breaker {
+		t.Fatalf("menu extraction was not attached")
+	}
+}
+
+func TestCreateGridSeedJobsAttachesMenuExtraction(t *testing.T) {
+	t.Parallel()
+
+	bbox := grid.BoundingBox{
+		MinLat: 40.30,
+		MinLon: -3.80,
+		MaxLat: 40.31,
+		MaxLon: -3.79,
+	}
+
+	breaker := gmaps.NewMenuBreaker(3, 5)
+
+	jobs, err := runner.CreateGridSeedJobs(
+		"en",
+		strings.NewReader("pizza"),
+		10,
+		false,
+		bbox,
+		1.0,
+		15,
+		nil,
+		nil,
+		false,
+		runner.WithMenuExtraction(breaker),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, j := range jobs {
+		job, ok := j.(*gmaps.GmapJob)
+		if !ok {
+			t.Fatalf("expected *gmaps.GmapJob, got %T", j)
+		}
+
+		if !job.ExtractMenu || job.MenuBreaker != breaker {
+			t.Fatalf("menu extraction was not attached")
+		}
+	}
+}
