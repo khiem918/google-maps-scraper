@@ -10,11 +10,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/gosom/kit/logging"
 	"github.com/gosom/scrapemate"
 
 	"github.com/gosom/google-maps-scraper/exiter"
@@ -36,6 +39,7 @@ const (
 type config struct {
 	input            string
 	results          string
+	failed           string
 	json             bool
 	lang             string
 	concurrency      int
@@ -44,6 +48,7 @@ type config struct {
 	debug            bool
 	disablePageReuse bool
 	exitOnInactivity time.Duration
+	overwrite        bool
 }
 
 func parseFlags() config {
@@ -51,6 +56,8 @@ func parseFlags() config {
 
 	flag.StringVar(&cfg.input, "input", "", "google-maps-scraper JSON results file (one place per line), or stdin")
 	flag.StringVar(&cfg.results, "results", "stdout", "path to the results file")
+	flag.BoolVar(&cfg.overwrite, "overwrite", false, "replace an existing, non-empty -results file")
+	flag.StringVar(&cfg.failed, "failed", "", "path for places to search again, in -input format (default: <results>.failed.json)")
 	flag.BoolVar(&cfg.json, "json", false, "write results as JSON lines instead of CSV")
 	flag.StringVar(&cfg.lang, "lang", "en", "language code for Google Search (e.g. 'vi')")
 	flag.IntVar(&cfg.concurrency, "c", 1, "number of places searched in parallel (keep low to avoid Google captchas)")
@@ -94,17 +101,34 @@ func run(ctx context.Context, cfg *config) error {
 		return err
 	}
 
+	failedPath := cfg.failed
+	if failedPath == "" {
+		failedPath = defaultFailedPath(cfg.results)
+	}
+
+	if failedPath != "" && filepath.Clean(failedPath) == filepath.Clean(cfg.results) {
+		return errors.New("-failed must differ from -results")
+	}
+
+	if err := checkResultsPath(cfg.results, cfg.input, cfg.overwrite); err != nil {
+		return err
+	}
+
 	entries, err := loadEntries(cfg.input)
 	if err != nil {
 		return err
 	}
 
+	// Same logger and component as scrapemate, so all lines share one format.
+	logger := logging.Get().With("component", "scrapemate")
+
 	exitMonitor := exiter.New()
 	breaker := gmaps.NewMenuBreaker(menuBlockedThreshold, menuNoPanelThreshold)
+	report := newRunReport()
 
-	jobs, skipped := menuJobs(entries, cfg.lang, breaker, exitMonitor)
+	jobs, skipped := menuJobs(entries, cfg.lang, breaker, exitMonitor, report)
 	if skipped > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d place(s) without a title were skipped\n", skipped)
+		logger.Warn("menu: places without a title were skipped", "skipped", skipped)
 	}
 
 	if len(jobs) == 0 {
@@ -129,7 +153,7 @@ func run(ctx context.Context, cfg *config) error {
 	}
 	defer app.Close()
 
-	fmt.Fprintf(os.Stderr, "searching menus for %d place(s)\n", len(jobs))
+	logger.Info("menu: searching menus", "places", len(jobs))
 
 	// Each MenuJob reports itself completed, so the run ends after the last one.
 	exitMonitor.IncrPlacesFound(len(jobs))
@@ -141,7 +165,14 @@ func run(ctx context.Context, cfg *config) error {
 
 	go exitMonitor.Run(ctx)
 
-	return app.Start(ctx, jobs...)
+	err = app.Start(ctx, jobs...)
+
+	// Report even when the run was interrupted, so unreached places can be retried.
+	if reportErr := reportRun(logger, report, entries, failedPath); reportErr != nil {
+		return errors.Join(err, reportErr)
+	}
+
+	return err
 }
 
 // loadEntries reads the places of a google-maps-scraper JSON results file.
@@ -181,9 +212,10 @@ func readEntries(r io.Reader) ([]*gmaps.Entry, error) {
 	}
 }
 
-// menuJobs creates one MenuJob per entry that has a title to search for and
-// returns how many entries were skipped.
-func menuJobs(entries []*gmaps.Entry, lang string, breaker *gmaps.MenuBreaker, exitMonitor exiter.Exiter) (jobs []scrapemate.IJob, skipped int) {
+// menuJobs creates one MenuJob per entry that has a title to search for,
+// recording each job's outcome in report, and returns how many entries were
+// skipped.
+func menuJobs(entries []*gmaps.Entry, lang string, breaker *gmaps.MenuBreaker, exitMonitor exiter.Exiter, report *runReport) (jobs []scrapemate.IJob, skipped int) {
 	jobs = make([]scrapemate.IJob, 0, len(entries))
 
 	for _, entry := range entries {
@@ -196,10 +228,41 @@ func menuJobs(entries []*gmaps.Entry, lang string, breaker *gmaps.MenuBreaker, e
 		jobs = append(jobs, gmaps.NewMenuJob("", lang, entry,
 			gmaps.WithMenuJobBreaker(breaker),
 			gmaps.WithMenuJobExitMonitor(exitMonitor),
+			gmaps.WithMenuJobOutcome(report.record),
 		))
 	}
 
 	return jobs, skipped
+}
+
+// checkResultsPath refuses results paths whose truncation loses data: the
+// input itself (lost if the run stops early) and, unless overwrite is set, an
+// existing non-empty file such as the results of an earlier run.
+func checkResultsPath(results, input string, overwrite bool) error {
+	if results == "stdout" {
+		return nil
+	}
+
+	if filepath.Clean(results) == filepath.Clean(input) {
+		return errors.New("-results must differ from -input")
+	}
+
+	if overwrite {
+		return nil
+	}
+
+	info, err := os.Stat(results)
+
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("check results file: %w", err)
+	case info.Size() > 0:
+		return fmt.Errorf("results file %s already exists: choose another -results or pass -overwrite", results)
+	default:
+		return nil
+	}
 }
 
 func openResults(path string) (io.Writer, func(), error) {
