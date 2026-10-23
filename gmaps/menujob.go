@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"uuid"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/gosom/kit/logging"
 	"github.com/gosom/scrapemate"
 	"github.com/mxschmitt/playwright-go"
 
@@ -63,6 +63,40 @@ const menuPhotoClickJS = `() => {
 
 type MenuJobOptions func(*MenuJob)
 
+// MenuOutcome is how a MenuJob ended for its place.
+type MenuOutcome string
+
+const (
+	// MenuFound means menu data was extracted.
+	MenuFound MenuOutcome = "found"
+	// MenuNotFound means the place's panel was found but it has no menu.
+	MenuNotFound MenuOutcome = "no_menu"
+	// MenuMismatch means the search showed a different place.
+	MenuMismatch MenuOutcome = "mismatch"
+	// MenuBlocked means Google Search answered with a captcha.
+	MenuBlocked MenuOutcome = "blocked"
+	// MenuNoPanel means the results had no knowledge panel (likely rate-limited).
+	MenuNoPanel MenuOutcome = "no_panel"
+	// MenuFetchFailed means the search page could not be loaded.
+	MenuFetchFailed MenuOutcome = "fetch_failed"
+	// MenuParseFailed means the search page could not be parsed.
+	MenuParseFailed MenuOutcome = "parse_failed"
+	// MenuSkipped means the breaker had tripped, so Google was not searched.
+	MenuSkipped MenuOutcome = "skipped"
+)
+
+// Retryable reports whether searching the place again later may succeed.
+func (o MenuOutcome) Retryable() bool {
+	switch o {
+	case MenuBlocked, MenuNoPanel, MenuFetchFailed, MenuParseFailed, MenuSkipped:
+		return true
+	case MenuFound, MenuNotFound, MenuMismatch:
+		return false
+	default:
+		return false
+	}
+}
+
 // MenuJob looks a place up on Google Search and extracts its menu panel
 // (menu sections with prices, popular dishes and menu photos) into Entry.
 type MenuJob struct {
@@ -74,6 +108,7 @@ type MenuJob struct {
 	Breaker                 *MenuBreaker
 	ExitMonitor             exiter.Exiter
 	WriterManagedCompletion bool
+	OnOutcome               func(*Entry, MenuOutcome)
 }
 
 // NewMenuJob creates a job that searches Google for the entry and reads its
@@ -135,6 +170,13 @@ func WithMenuJobWriterManagedCompletion() MenuJobOptions {
 	}
 }
 
+// WithMenuJobOutcome calls fn with the job's outcome once it is processed.
+func WithMenuJobOutcome(fn func(*Entry, MenuOutcome)) MenuJobOptions {
+	return func(j *MenuJob) {
+		j.OnOutcome = fn
+	}
+}
+
 func (j *MenuJob) UseInResults() bool {
 	return j.UsageInResults
 }
@@ -153,7 +195,10 @@ func (j *MenuJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 		resp.Meta = nil
 	}()
 
-	j.applyMenu(ctx, resp)
+	outcome := j.applyMenu(ctx, resp)
+	if j.OnOutcome != nil {
+		j.OnOutcome(j.Entry, outcome)
+	}
 
 	if j.ExtractEmail && j.Entry.IsWebsiteValidForEmail() {
 		opts := []EmailExtractJobOptions{}
@@ -179,11 +224,11 @@ func (j *MenuJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 	return j.Entry, nil, nil
 }
 
-func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) {
+func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) MenuOutcome {
 	logger := scrapemate.GetLoggerFromContext(ctx)
 
 	if errors.Is(resp.Error, errMenuDisabled) {
-		return
+		return MenuSkipped
 	}
 
 	body := string(resp.Body)
@@ -195,13 +240,13 @@ func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) {
 			logger.Info("menu: google search blocked", "title", j.Entry.Title)
 		}
 
-		return
+		return MenuBlocked
 	}
 
 	if resp.Error != nil {
 		logger.Info("menu: fetch failed", "title", j.Entry.Title, "error", resp.Error)
 
-		return
+		return MenuFetchFailed
 	}
 
 	if !hasKnowledgePanel(body) {
@@ -211,7 +256,7 @@ func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) {
 			logger.Info("menu: no knowledge panel in search results", "title", j.Entry.Title)
 		}
 
-		return
+		return MenuNoPanel
 	}
 
 	j.Breaker.RecordOK()
@@ -219,17 +264,20 @@ func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) {
 	if !pageMatchesPlace(body, j.Entry.DataID, j.Entry.Cid) {
 		logger.Info("menu: search result does not match place", "title", j.Entry.Title)
 
-		return
+		return MenuMismatch
 	}
 
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
 	if err != nil {
 		logger.Info("menu: could not parse search page", "title", j.Entry.Title, "error", err)
 
-		return
+		return MenuParseFailed
 	}
 
 	menu := parseSearchMenu(doc)
+	if menu.IsEmpty() {
+		return MenuNotFound
+	}
 
 	// The Search panel carries prices, so it supersedes the Maps menu.
 	if len(menu.Sections) > 0 {
@@ -242,6 +290,8 @@ func (j *MenuJob) applyMenu(ctx context.Context, resp *scrapemate.Response) {
 	if source, ok := resp.Meta[menuPhotosSourceMetaKey].(string); ok {
 		j.Entry.MenuPhotos.Source = source
 	}
+
+	return MenuFound
 }
 
 func (j *MenuJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPage) scrapemate.Response {
@@ -254,8 +304,12 @@ func (j *MenuJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPag
 		return resp
 	}
 
-	restoreUA := overrideSearchUserAgent(page)
+	logger := scrapemate.GetLoggerFromContext(ctx)
+
+	restoreUA := overrideSearchUserAgent(page, j.URLParams[languageQueryParam])
 	defer restoreUA()
+
+	before := page.URL()
 
 	pageResponse, err := page.Goto(j.GetFullURL(), scrapemate.WaitUntilDOMContentLoaded)
 
@@ -263,7 +317,7 @@ func (j *MenuJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPag
 	case err == nil:
 		resp.StatusCode = pageResponse.StatusCode
 		resp.Headers = pageResponse.Headers
-	case isGoogleURL(page.URL()):
+	case isSearchNavigation(before, page.URL(), j.URLParams["q"]):
 		// The adapter reads the navigation response body after loading, which
 		// fails when Google Search replaces that response right away. The page
 		// itself is loaded and is read below with page.Content().
@@ -305,10 +359,9 @@ func (j *MenuJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPag
 	resp.URL = page.URL()
 	resp.Body = []byte(body)
 
-	dumpMenuDebug(j.ID, resp.Body)
-
 	if os.Getenv("GMAPS_DEBUG_DUMP_RAW") == "1" {
-		log.Printf("DEBUG: menu page url=%s clicked=%v", resp.URL, clicked)
+		logger.Info("menu: debug page", "url", resp.URL, "clicked", clicked)
+		dumpMenuDebug(logger, j.ID, resp.Body)
 	}
 
 	if clicked && strings.Contains(body, `role="listitem"`) {
@@ -406,13 +459,14 @@ func menuPhotosSource(ctx context.Context, page scrapemate.BrowserPage) string {
 	return ""
 }
 
-// overrideSearchUserAgent switches the page to a current Chrome user agent
-// for the duration of a menu job and returns a func restoring the original.
+// overrideSearchUserAgent switches the page to a current Chrome user agent,
+// with an Accept-Language matching langCode, for the duration of a menu job
+// and returns a func restoring the original.
 // scrapemate's default user agent is Chrome 91, which Google Search treats as
 // outdated: it answers with a reduced results page without the knowledge
 // panel (Google Maps still accepts it, so the place scrape is unaffected).
 // Any failure leaves the page untouched.
-func overrideSearchUserAgent(page scrapemate.BrowserPage) func() {
+func overrideSearchUserAgent(page scrapemate.BrowserPage, langCode string) func() {
 	noop := func() {}
 
 	pwPage, ok := page.Unwrap().(playwright.Page)
@@ -437,7 +491,7 @@ func overrideSearchUserAgent(page scrapemate.BrowserPage) func() {
 		return noop
 	}
 
-	if _, err := session.Send("Network.setUserAgentOverride", searchUserAgentOverride(version)); err != nil {
+	if _, err := session.Send("Network.setUserAgentOverride", searchUserAgentOverride(version, langCode)); err != nil {
 		_ = session.Detach()
 
 		return noop
@@ -454,8 +508,9 @@ func overrideSearchUserAgent(page scrapemate.BrowserPage) func() {
 
 // searchUserAgentOverride builds Network.setUserAgentOverride params for a
 // desktop Linux Chrome matching browserVersion (e.g. "141.0.7390.37"), with
-// consistent client hints. Falls back to fallbackChromeVersion.
-func searchUserAgentOverride(browserVersion string) map[string]any {
+// consistent client hints and an Accept-Language for langCode. Falls back to
+// fallbackChromeVersion.
+func searchUserAgentOverride(browserVersion, langCode string) map[string]any {
 	const fallbackChromeVersion = "140.0.0.0"
 
 	if browserVersion == "" || !strings.Contains(browserVersion, ".") {
@@ -473,7 +528,7 @@ func searchUserAgentOverride(browserVersion string) map[string]any {
 			"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s.0.0.0 Safari/537.36",
 			major,
 		),
-		"acceptLanguage": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+		"acceptLanguage": searchAcceptLanguage(langCode),
 		"platform":       "Linux x86_64",
 		"userAgentMetadata": map[string]any{
 			"brands": []map[string]any{
@@ -491,6 +546,40 @@ func searchUserAgentOverride(browserVersion string) map[string]any {
 	}
 }
 
+// searchAcceptLanguage returns the Accept-Language header for langCode (the
+// hl parameter), with English as the fallback.
+func searchAcceptLanguage(langCode string) string {
+	const english = "en-US,en;q=0.9"
+
+	lang := strings.TrimSpace(langCode)
+	if lang == "" || strings.EqualFold(lang, "en") || strings.EqualFold(lang, "en-US") {
+		return english
+	}
+
+	return lang + ",en;q=0.8"
+}
+
+// isSearchNavigation reports whether the page moved from before to the Google
+// Search page of query, or to Google's captcha page. A page that is still on
+// before (e.g. the previous job's search, as pages are reused) was not
+// loaded for this job.
+func isSearchNavigation(before, current, query string) bool {
+	if current == before || !isGoogleURL(current) {
+		return false
+	}
+
+	if isSearchBlocked(current, "") {
+		return true
+	}
+
+	u, err := url.Parse(current)
+	if err != nil {
+		return false
+	}
+
+	return u.Path == "/search" && u.Query().Get("q") == query
+}
+
 // isGoogleURL reports whether rawURL points to a Google host.
 func isGoogleURL(rawURL string) bool {
 	u, err := url.Parse(rawURL)
@@ -504,15 +593,11 @@ func isGoogleURL(rawURL string) bool {
 }
 
 // dumpMenuDebug writes the Google Search page holding the menu panel to
-// /out/menu-<jobID>.html when GMAPS_DEBUG_DUMP_RAW=1, so selectors can be
-// fixed quickly when Google changes the panel. No-op otherwise.
-func dumpMenuDebug(jobID string, body []byte) {
-	if os.Getenv("GMAPS_DEBUG_DUMP_RAW") != "1" {
-		return
-	}
-
+// /out/menu-<jobID>.html, so selectors can be fixed quickly when Google
+// changes the panel. Callers enable it with GMAPS_DEBUG_DUMP_RAW=1.
+func dumpMenuDebug(logger logging.Logger, jobID string, body []byte) {
 	path := fmt.Sprintf("/out/menu-%s.html", jobID)
 	if err := os.WriteFile(path, body, 0o644); err != nil { //nolint:gosec // debug dump meant to be readable on the host
-		log.Printf("DEBUG: failed to write menu dump %s: %v", path, err)
+		logger.Warn("menu: failed to write debug dump", "path", path, "error", err)
 	}
 }

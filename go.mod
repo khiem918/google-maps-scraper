@@ -16,6 +16,7 @@ require (
 	github.com/google/open-location-code/go v0.0.0-20250415120251-fa6d7f9d4765
 	github.com/gorilla/websocket v1.5.3
 	github.com/gosom/go-leadsdb v0.0.0-20251228094956-ed313efc171f
+	github.com/gosom/kit v0.0.0-20230309082109-543b32ac686a
 	github.com/gosom/scrapemate v1.4.0
 	github.com/hetznercloud/hcloud-go/v2 v2.36.0
 	github.com/jackc/pgx/v5 v5.9.2
@@ -181,7 +182,6 @@ require (
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gordonklaus/ineffassign v0.2.0 // indirect
-	github.com/gosom/kit v0.0.0-20230309082109-543b32ac686a // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.5.0 // indirect
 	github.com/gostaticanalysis/forcetypeassert v0.2.0 // indirect

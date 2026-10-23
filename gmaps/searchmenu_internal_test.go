@@ -3,6 +3,7 @@ package gmaps
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -122,6 +123,14 @@ func TestIsSearchBlocked(t *testing.T) {
 	require.True(t, isSearchBlocked("https://www.google.com/sorry/index?continue=x", ""))
 	require.True(t, isSearchBlocked("https://www.google.com/search?q=x", `<form id="captcha-form">`))
 	require.False(t, isSearchBlocked("https://www.google.com/search?q=x", string(loadSearchMenuFixture(t))))
+}
+
+func TestIsSearchBlockedIgnoresPanelText(t *testing.T) {
+	page := `<div data-feature-id="` + busanDataID + `">Review: no unusual traffic here</div>`
+
+	require.False(t, isSearchBlocked("https://www.google.com/search?q=x", page))
+	require.True(t, isSearchBlocked("https://www.google.com/search?q=x", "Our systems have detected unusual traffic"))
+	require.True(t, isSearchBlocked("https://www.google.com/sorry/index", page), "the captcha URL always wins")
 }
 
 func TestIsMenuButtonLabel(t *testing.T) {
@@ -427,7 +436,7 @@ func TestMenuJobKnowledgePanelResetsStreaks(t *testing.T) {
 }
 
 func TestSearchUserAgentOverride(t *testing.T) {
-	params := searchUserAgentOverride("141.0.7390.37")
+	params := searchUserAgentOverride("141.0.7390.37", "vi")
 
 	require.Equal(t,
 		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
@@ -438,7 +447,217 @@ func TestSearchUserAgentOverride(t *testing.T) {
 	require.Equal(t, "141.0.7390.37", meta["fullVersion"])
 	require.Equal(t, "Linux", meta["platform"])
 
-	fallback := searchUserAgentOverride("")
+	require.Equal(t, "vi,en;q=0.8", params["acceptLanguage"])
+
+	fallback := searchUserAgentOverride("", "en")
 	require.Contains(t, fallback["userAgent"], "Chrome/140.0.0.0")
 	require.NotContains(t, fallback["userAgent"], "Chrome/91")
+	require.Equal(t, "en-US,en;q=0.9", fallback["acceptLanguage"])
+}
+
+func TestSearchAcceptLanguage(t *testing.T) {
+	for lang, want := range map[string]string{
+		"":      "en-US,en;q=0.9",
+		"en":    "en-US,en;q=0.9",
+		"EN-us": "en-US,en;q=0.9",
+		"vi":    "vi,en;q=0.8",
+		"el":    "el,en;q=0.8",
+		"pt-BR": "pt-BR,en;q=0.8",
+	} {
+		require.Equal(t, want, searchAcceptLanguage(lang), lang)
+	}
+}
+
+const (
+	panelNoMenuPage = `<html><body><div data-feature-id="` + busanDataID + `">Busan</div></body></html>`
+	panelMenuPage   = `<html><body><div data-feature-id="` + busanDataID + `">
+<div role="group" aria-labelledby="h1"><div id="h1" data-level="1">Drink</div>
+<div data-menu-item-id="1" data-level="2"><div><div><span>Tea</span><span aria-label="price">10.000 ₫</span></div><div>Trà</div></div></div>
+</div></div></body></html>`
+	otherPlacePage = `<html><body><div data-feature-id="0x1:0x2">Other</div></body></html>`
+)
+
+func TestMenuJobOutcome(t *testing.T) {
+	searchURL := "https://www.google.com/search?q=x"
+
+	for _, tc := range []struct {
+		name string
+		resp scrapemate.Response
+		want MenuOutcome
+	}{
+		{name: "found", resp: scrapemate.Response{URL: searchURL, Body: []byte(panelMenuPage)}, want: MenuFound},
+		{name: "no menu", resp: scrapemate.Response{URL: searchURL, Body: []byte(panelNoMenuPage)}, want: MenuNotFound},
+		{name: "mismatch", resp: scrapemate.Response{URL: searchURL, Body: []byte(otherPlacePage)}, want: MenuMismatch},
+		{name: "blocked", resp: scrapemate.Response{URL: "https://www.google.com/sorry/index", Error: errMenuSearchBlocked}, want: MenuBlocked},
+		{name: "no panel", resp: scrapemate.Response{URL: searchURL, Body: []byte(degradedSearchPage)}, want: MenuNoPanel},
+		{name: "fetch failed", resp: scrapemate.Response{URL: searchURL, Error: errors.New("timeout")}, want: MenuFetchFailed},
+		{name: "skipped", resp: scrapemate.Response{Error: errMenuDisabled}, want: MenuSkipped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var (
+				gotEntry   *Entry
+				gotOutcome MenuOutcome
+			)
+
+			entry := Entry{Title: "Busan", DataID: busanDataID}
+			job := NewMenuJob("parent", "vi", &entry, WithMenuJobOutcome(func(e *Entry, o MenuOutcome) {
+				gotEntry, gotOutcome = e, o
+			}))
+
+			_, _, err := job.Process(context.Background(), &tc.resp)
+
+			require.NoError(t, err)
+			require.Same(t, &entry, gotEntry)
+			require.Equal(t, tc.want, gotOutcome)
+		})
+	}
+}
+
+func TestMenuJobOutcomeFoundFillsEntry(t *testing.T) {
+	entry := Entry{Title: "Busan", DataID: busanDataID}
+	job := NewMenuJob("parent", "vi", &entry)
+	resp := scrapemate.Response{URL: "https://www.google.com/search?q=x", Body: []byte(panelMenuPage)}
+
+	_, _, err := job.Process(context.Background(), &resp)
+
+	require.NoError(t, err)
+	require.Equal(t, []MenuSection{{Name: "Drink", Items: []MenuItem{{Name: "Tea", Price: "10.000 ₫", Description: "Trà"}}}}, entry.MenuItems)
+}
+
+func TestMenuOutcomeRetryable(t *testing.T) {
+	for _, o := range []MenuOutcome{MenuBlocked, MenuNoPanel, MenuFetchFailed, MenuParseFailed, MenuSkipped} {
+		require.True(t, o.Retryable(), o)
+	}
+
+	for _, o := range []MenuOutcome{MenuFound, MenuNotFound, MenuMismatch} {
+		require.False(t, o.Retryable(), o)
+	}
+}
+
+func TestMenuJobPanelMentioningUnusualTrafficIsNotBlocked(t *testing.T) {
+	var got MenuOutcome
+
+	breaker := NewMenuBreaker(1, 5)
+	entry := Entry{Title: "Busan", DataID: busanDataID}
+	job := NewMenuJob("parent", "vi", &entry,
+		WithMenuJobBreaker(breaker),
+		WithMenuJobOutcome(func(_ *Entry, o MenuOutcome) { got = o }),
+	)
+	body := strings.Replace(panelMenuPage, "Trà", "Trà - no unusual traffic", 1)
+	resp := scrapemate.Response{URL: "https://www.google.com/search?q=x", Body: []byte(body)}
+
+	_, _, err := job.Process(context.Background(), &resp)
+
+	require.NoError(t, err)
+	require.Equal(t, MenuFound, got)
+	require.True(t, breaker.Allow(), "a results page must not count as blocked")
+}
+
+func TestIsSearchNavigation(t *testing.T) {
+	const (
+		query  = "Busan Korean Food Biên Hòa"
+		target = "https://www.google.com/search?q=Busan+Korean+Food+Bi%C3%AAn+H%C3%B2a&hl=vi"
+		other  = "https://www.google.com/search?q=Old+place&hl=vi"
+	)
+
+	for _, tc := range []struct {
+		name            string
+		before, current string
+		want            bool
+	}{
+		{name: "loaded target", before: "about:blank", current: target, want: true},
+		{name: "loaded target from previous search", before: other, current: target, want: true},
+		{name: "still on previous search", before: other, current: other},
+		{name: "still on maps page", before: "https://www.google.com/maps/place/x", current: "https://www.google.com/maps/place/x"},
+		{name: "moved to another search", before: "about:blank", current: other},
+		{name: "moved to captcha", before: other, current: "https://www.google.com/sorry/index?continue=x", want: true},
+		{name: "error page", before: other, current: "chrome-error://chromewebdata/"},
+		{name: "other host", before: other, current: "https://example.com/search?q=Busan+Korean+Food+Bi%C3%AAn+H%C3%B2a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isSearchNavigation(tc.before, tc.current, query))
+		})
+	}
+}
+
+// fakeSearchPage is a BrowserPage whose Goto fails after optionally moving to
+// navigateTo. Methods the menu job does not call panic via the nil embed.
+type fakeSearchPage struct {
+	scrapemate.BrowserPage
+
+	url        string
+	navigateTo string
+	gotoErr    error
+	content    string
+}
+
+func (p *fakeSearchPage) Goto(string, scrapemate.WaitUntilState) (*scrapemate.PageResponse, error) {
+	if p.navigateTo != "" {
+		p.url = p.navigateTo
+	}
+
+	return nil, p.gotoErr
+}
+
+func (p *fakeSearchPage) URL() string { return p.url }
+
+func (p *fakeSearchPage) Content() (string, error) { return p.content, nil }
+
+// Eval reports every readiness check as done and finds no menu button.
+func (p *fakeSearchPage) Eval(string, ...any) (any, error) { return true, nil }
+
+func (p *fakeSearchPage) Unwrap() any { return nil }
+
+func TestMenuJobBrowserActionsGotoError(t *testing.T) {
+	const previous = "https://www.google.com/search?q=Old+place&hl=vi"
+
+	gotoErr := errors.New("navigation timeout")
+	entry := Entry{Title: "Busan", Address: "Biên Hòa", DataID: busanDataID}
+
+	for _, tc := range []struct {
+		name       string
+		navigateTo string
+		wantErr    error
+		wantBody   bool
+	}{
+		{name: "page still shows the previous search", wantErr: gotoErr},
+		{name: "page loaded the search", navigateTo: "https://www.google.com/search?q=Busan+Bi%C3%AAn+H%C3%B2a&hl=vi", wantBody: true},
+		{name: "page redirected to captcha", navigateTo: "https://www.google.com/sorry/index?continue=x", wantErr: errMenuSearchBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := NewMenuJob("parent", "vi", &entry)
+			page := &fakeSearchPage{url: previous, navigateTo: tc.navigateTo, gotoErr: gotoErr, content: panelMenuPage}
+
+			resp := job.BrowserActions(context.Background(), page)
+
+			if tc.wantErr != nil {
+				require.ErrorIs(t, resp.Error, tc.wantErr)
+				require.Empty(t, resp.Body, "the previous job's page must not be read")
+			} else {
+				require.NoError(t, resp.Error)
+			}
+
+			require.Equal(t, tc.wantBody, len(resp.Body) > 0)
+		})
+	}
+}
+
+func TestMenuJobStalePageIsRetryable(t *testing.T) {
+	var got MenuOutcome
+
+	entry := Entry{Title: "Busan", Address: "Biên Hòa", DataID: busanDataID}
+	job := NewMenuJob("parent", "vi", &entry, WithMenuJobOutcome(func(_ *Entry, o MenuOutcome) { got = o }))
+	page := &fakeSearchPage{
+		url:     "https://www.google.com/search?q=Old+place&hl=vi",
+		gotoErr: errors.New("navigation timeout"),
+		content: otherPlacePage,
+	}
+
+	resp := job.BrowserActions(context.Background(), page)
+
+	_, _, err := job.Process(context.Background(), &resp)
+
+	require.NoError(t, err)
+	require.Equal(t, MenuFetchFailed, got, "not mismatch, which would drop the place from the retry file")
+	require.True(t, got.Retryable())
 }

@@ -81,10 +81,18 @@ func containsNumber(s, needle string) bool {
 }
 
 // isSearchBlocked reports whether Google answered with a captcha / unusual
-// traffic page instead of results.
+// traffic page instead of results. A page showing a knowledge panel holds
+// results, so its text (e.g. a review mentioning "unusual traffic") is ignored.
 func isSearchBlocked(pageURL, html string) bool {
-	return strings.Contains(pageURL, "/sorry/") ||
-		strings.Contains(html, `id="captcha-form"`) ||
+	if strings.Contains(pageURL, "/sorry/") {
+		return true
+	}
+
+	if hasKnowledgePanel(html) {
+		return false
+	}
+
+	return strings.Contains(html, `id="captcha-form"`) ||
 		strings.Contains(html, "unusual traffic")
 }
 
