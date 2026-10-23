@@ -509,8 +509,24 @@ func TestMenuJobOutcome(t *testing.T) {
 			require.NoError(t, err)
 			require.Same(t, &entry, gotEntry)
 			require.Equal(t, tc.want, gotOutcome)
+			require.Equal(t, string(tc.want), entry.MenuOutcome)
 		})
 	}
+}
+
+func TestMenuJobOutcomeSetBeforeEmailJob(t *testing.T) {
+	entry := Entry{Title: "Busan", DataID: busanDataID, WebSite: "https://busan.example"}
+	job := NewMenuJob("parent", "vi", &entry, WithMenuJobEmail())
+	resp := scrapemate.Response{URL: "https://www.google.com/search?q=x", Body: []byte(panelMenuPage)}
+
+	result, next, err := job.Process(context.Background(), &resp)
+
+	require.NoError(t, err)
+	require.Nil(t, result)
+	require.Len(t, next, 1)
+	require.IsType(t, &EmailExtractJob{}, next[0])
+	require.Same(t, &entry, next[0].(*EmailExtractJob).Entry)
+	require.Equal(t, string(MenuFound), entry.MenuOutcome)
 }
 
 func TestMenuJobOutcomeFoundFillsEntry(t *testing.T) {
