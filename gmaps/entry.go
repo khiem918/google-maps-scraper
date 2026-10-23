@@ -159,6 +159,7 @@ type Entry struct {
 	MenuItems           []MenuSection          `json:"menu_items"`
 	PopularDishes       []PopularDish          `json:"popular_dishes"`
 	MenuPhotos          MenuPhotos             `json:"menu_photos"`
+	MenuOutcome         string                 `json:"menu_outcome,omitempty"`
 	Highlights          []Highlight            `json:"highlights"`
 	Owner               Owner                  `json:"owner"`
 	CompleteAddress     Address                `json:"complete_address"`

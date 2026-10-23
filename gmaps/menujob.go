@@ -196,6 +196,8 @@ func (j *MenuJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 	}()
 
 	outcome := j.applyMenu(ctx, resp)
+	j.Entry.MenuOutcome = string(outcome)
+
 	if j.OnOutcome != nil {
 		j.OnOutcome(j.Entry, outcome)
 	}

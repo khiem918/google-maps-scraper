@@ -265,6 +265,27 @@ func Test_EntryCSVIncludesCreditCardsAccepted(t *testing.T) {
 	)
 }
 
+func Test_EntryMarshalMenuOutcome(t *testing.T) {
+	raw, err := json.Marshal(gmaps.Entry{Title: "x", MenuOutcome: "found"})
+	require.NoError(t, err)
+
+	var got map[string]json.RawMessage
+
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.JSONEq(t, `"found"`, string(got["menu_outcome"]))
+
+	raw, err = json.Marshal(gmaps.Entry{Title: "x"})
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "menu_outcome", "omitted when empty")
+}
+
+func Test_EntryCSVExcludesMenuOutcome(t *testing.T) {
+	entry := gmaps.Entry{MenuOutcome: "found"}
+
+	require.NotContains(t, entry.CsvHeaders(), "menu_outcome")
+	require.Equal(t, len(entry.CsvHeaders()), len(entry.CsvRow()))
+}
+
 func Test_EntryMarshalEmitsBothLongitudeKeys(t *testing.T) {
 	entry := gmaps.Entry{Title: "x", Category: "y", Latitude: 1.5, Longtitude: 2.5}
 
